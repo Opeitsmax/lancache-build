@@ -36,8 +36,21 @@ jobs:
           IMAGE_PREFIX="ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
           echo "IMAGE_PREFIX=${IMAGE_PREFIX}" >> $GITHUB_ENV
 
+      # Check if monolithic & dns already exist to save time
+      - name: Check Existing Images
+        id: check_existing
+        run: |
+          if docker buildx imagetools inspect "${IMAGE_PREFIX}/lancache-monolithic:0.2.1" >/dev/null 2>&1 && \
+             docker buildx imagetools inspect "${IMAGE_PREFIX}/lancache-dns:0.2.1" >/dev/null 2>&1; then
+            echo "CORE_IMAGES_EXIST=true" >> $GITHUB_ENV
+            echo "Core images already exist, will skip rebuilding them."
+          else
+            echo "CORE_IMAGES_EXIST=false" >> $GITHUB_ENV
+          fi
+
       # Stage 1: Build lancache-ubuntu base image
       - name: Build lancache-ubuntu (amd64 + arm64)
+        if: env.CORE_IMAGES_EXIST != 'true'
         run: |
           git clone --depth 1 https://github.com/lancachenet/ubuntu.git base-ubuntu
           cd base-ubuntu
@@ -49,10 +62,10 @@ jobs:
 
       # Stage 2: Build lancache-ubuntu-nginx
       - name: Build lancache-ubuntu-nginx (amd64 + arm64)
+        if: env.CORE_IMAGES_EXIST != 'true'
         run: |
           git clone --depth 1 https://github.com/lancachenet/ubuntu-nginx.git base-nginx
           cd base-nginx
-          # Point base image to our newly published multi-arch lancache-ubuntu
           sed -i "s|lancachenet/ubuntu:latest|${IMAGE_PREFIX}/lancache-ubuntu:latest|g" Dockerfile
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
@@ -62,10 +75,10 @@ jobs:
 
       # Stage 3: Build lancache-monolithic
       - name: Build lancache-monolithic (amd64 + arm64)
+        if: env.CORE_IMAGES_EXIST != 'true'
         run: |
           git clone --depth 1 https://github.com/lancachenet/monolithic.git monolithic
           cd monolithic
-          # Point base image to our multi-arch lancache-ubuntu-nginx
           sed -i "s|lancachenet/ubuntu-nginx:latest|${IMAGE_PREFIX}/lancache-ubuntu-nginx:latest|g" Dockerfile
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
@@ -76,10 +89,10 @@ jobs:
 
       # Stage 4: Build lancache-dns
       - name: Build lancache-dns (amd64 + arm64)
+        if: env.CORE_IMAGES_EXIST != 'true'
         run: |
           git clone --depth 1 https://github.com/lancachenet/lancache-dns.git dns
           cd dns
-          # Point base image to our multi-arch lancache-ubuntu
           sed -i "s|lancachenet/ubuntu:latest|${IMAGE_PREFIX}/lancache-ubuntu:latest|g" Dockerfile
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
@@ -88,6 +101,15 @@ jobs:
             --push .
           cd ..
 
+      # Stage 5: Build lancache-prefill
+      - name: Build lancache-prefill (amd64 + arm64)
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -t "${IMAGE_PREFIX}/lancache-prefill:latest" \
+            -t "${IMAGE_PREFIX}/lancache-prefill:0.2.1" \
+            --push ./prefill
+
       - name: Output Published Digests
         run: |
           echo "=== Multi-Arch Images Published ==="
@@ -95,3 +117,5 @@ jobs:
           docker buildx imagetools inspect "${IMAGE_PREFIX}/lancache-monolithic:0.2.1"
           echo "DNS: ${IMAGE_PREFIX}/lancache-dns:0.2.1"
           docker buildx imagetools inspect "${IMAGE_PREFIX}/lancache-dns:0.2.1"
+          echo "Prefill: ${IMAGE_PREFIX}/lancache-prefill:0.2.1"
+          docker buildx imagetools inspect "${IMAGE_PREFIX}/lancache-prefill:0.2.1"
